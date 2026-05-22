@@ -296,7 +296,6 @@ def _workspace_session_from_referer(referer: str | None) -> str | None:
 
 def _rewrite_root_asset_query(content: str, session_id: str, request_base: str) -> str:
     base = request_base if request_base else ""
-    workspace_base = _workspace_proxy_base(session_id)
     for marker in ('/assets/', 'assets/'):
         for quote in ('"', "'"):
             token = f"{quote}{marker}"
@@ -320,7 +319,11 @@ def _rewrite_root_asset_query(content: str, session_id: str, request_base: str) 
                     start = end + 1
                     continue
                 suffix = url[len('/assets/'):] if url.startswith('/assets/') else url[len('assets/'):]
-                new_url = f"{current_base}/assets/{suffix}" if current_base else f"/assets/{suffix}"
+                if marker == 'assets/':
+                    prefix = current_base.lstrip('/')
+                    new_url = f"{prefix}/assets/{suffix}" if prefix else f"assets/{suffix}"
+                else:
+                    new_url = f"{current_base}/assets/{suffix}" if current_base else f"/assets/{suffix}"
                 content = content[:idx + 1] + new_url + content[end:]
                 start = idx + 1 + len(new_url) + 1
     return content
