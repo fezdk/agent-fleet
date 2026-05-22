@@ -879,6 +879,7 @@ header h1 { font-size: 1.3rem; font-weight: 600; }
 }
 .login-card input[type="password"],
 .login-card input[type="text"],
+.login-card input[type="number"],
 .login-card select {
   width: 100%;
   padding: 8px 12px;
@@ -927,6 +928,12 @@ header h1 { font-size: 1.3rem; font-weight: 600; }
   margin-top: 1rem;
 }
 .modal-actions button { flex: 1; }
+.settings-card {
+  max-width: 420px;
+}
+.settings-card .form-help {
+  margin-bottom: 0.25rem;
+}
 .modal-actions .btn-sm {
   background: var(--surface);
   border: 1px solid var(--border);

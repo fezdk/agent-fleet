@@ -9,7 +9,7 @@
 </head>
 <body>
   <header id="app-header" class="hidden">
-    <h1>Fleet Manager</h1>
+    <h1 id="app-title">Fleet Manager</h1>
     <div class="view-mode-selector">
       <button class="view-mode-btn active" data-mode="list" title="List view" onclick="setViewMode('list')">☰</button>
       <button class="view-mode-btn" data-mode="tab" title="Tab view" onclick="setViewMode('tab')">▭</button>
@@ -21,6 +21,7 @@
       <button id="multi-view-btn" class="btn-sm" onclick="openMultiView()">⊞<span class="btn-label"> Multi View</span></button>
       <span id="session-count" class="badge badge-info"><span class="count-num">0</span><span class="btn-label"> sessions</span></span>
       <span id="ws-status" class="badge badge-disconnected"><span class="ws-dot">●</span><span class="btn-label"> disconnected</span></span>
+      <button id="settings-btn" class="btn-sm" onclick="showSettingsModal()" title="UI settings">⚙</button>
       <button id="theme-toggle" class="btn-sm" onclick="toggleTheme()" title="Toggle dark/light theme">🌙</button>
       <button id="logout-btn" class="btn-sm hidden" onclick="logout()">Logout</button>
     </div>
@@ -335,6 +336,38 @@
         <div class="modal-actions">
           <button type="button" class="btn-sm" onclick="hideNewSessionModal()">Cancel</button>
           <button type="submit" id="ns-submit">Start</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- UI Settings Modal -->
+  <div id="settings-overlay" class="login-overlay hidden" onclick="if(event.target===this)hideSettingsModal()">
+    <div class="login-card settings-card">
+      <h2>Fleet Settings</h2>
+      <p>Customize this browser window and New Session defaults.</p>
+      <form id="settings-form">
+        <label class="form-label" for="settings-title">Window title</label>
+        <input type="text" id="settings-title" placeholder="Agent Fleet Manager">
+        <p class="form-help">Saved for this window, so separate Fleet windows can have different browser titles.</p>
+
+        <label class="form-label" for="settings-default-kind">Default session type</label>
+        <select id="settings-default-kind">
+          <option value="agent">Fleet agent</option>
+          <option value="opencode_web">OpenCode web UI</option>
+        </select>
+
+        <label class="form-label" for="settings-default-agent">Default agent</label>
+        <select id="settings-default-agent">
+          <option value="opencode">OpenCode</option>
+          <option value="claude-code">Claude Code</option>
+          <option value="copilot">Copilot</option>
+        </select>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-sm" onclick="resetSettingsForm()">Reset</button>
+          <button type="button" class="btn-sm" onclick="hideSettingsModal()">Cancel</button>
+          <button type="submit" id="settings-submit">Save</button>
         </div>
       </form>
     </div>

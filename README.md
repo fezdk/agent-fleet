@@ -271,6 +271,7 @@ Dashboard at `http://127.0.0.1:7700`:
   - **Tab view** — horizontal browser-style tabs above a full-height terminal with keys bar and message input; great for monitoring one session at a time
   - **Side-tab view** — left panel (280px) with session list showing name/state/summary, right side is terminal + controls; collapses to horizontal strip on mobile
 - **Session filters** — filter the dashboard to all sessions, tmux-backed agents, or OpenCode web workspaces. Mobile uses a compact header toggle for the same filter.
+- **Fleet settings** — click the gear icon to set a per-window browser title and default New Session type/agent. The title is stored in `sessionStorage` so different Fleet windows can be labeled independently; defaults are stored in `localStorage`.
 - **Dark/light theme** — toggle via the sun/moon button in the header. Dark mode uses a Darcula-style palette; terminal stays dark in both modes. Theme preference persists in localStorage
 - **Focus view** — click "Open" on a session card to get a large terminal output modal with auto-refresh (3s), an input bar for sending instructions, and a command dropdown for sending raw messages (slash commands, custom input without `[fleet]` prefix)
 - **Multi view** — click "Multi View" in the header to see all session terminals side-by-side in a responsive grid, auto-refreshing. Click any pane to open its focus view
@@ -282,7 +283,7 @@ Dashboard at `http://127.0.0.1:7700`:
 - **Login** — when auth is enabled, a login prompt appears; token is stored in localStorage
 - **Mobile responsive** — single-line sticky icon header, full-width focus/multi modals, compact keys bar, sidetab collapses to horizontal strip, dynamic viewport height (`dvh`) for correct sizing with mobile browser URL bars
 
-View mode and theme preferences are persisted in localStorage and restored on page reload.
+View mode, theme, session filter, and New Session default preferences are persisted in localStorage and restored on page reload. The custom window title is stored per browser window.
 
 ### Orchestrator
 

@@ -22,6 +22,10 @@ let sessionFilter = localStorage.getItem('fleet_session_filter') || 'all';
 
 const MSG_HISTORY_KEY = 'fleet_msg_history';
 const MSG_HISTORY_MAX = 50;
+const DEFAULT_WINDOW_TITLE = 'Agent Fleet Manager';
+const DEFAULT_SESSION_KIND_KEY = 'fleet_default_session_kind';
+const DEFAULT_SESSION_AGENT_KEY = 'fleet_default_session_agent';
+const WINDOW_TITLE_KEY = 'fleet_window_title';
 let allHistory = JSON.parse(localStorage.getItem(MSG_HISTORY_KEY) || '{}');
 let msgHistoryIndex = -1;
 let msgHistoryDraft = '';
@@ -36,6 +40,55 @@ function _getHistory(sessionId) {
   if (!allHistory[sessionId]) allHistory[sessionId] = [];
   return allHistory[sessionId];
 }
+
+function getWindowTitleSetting() {
+  return sessionStorage.getItem(WINDOW_TITLE_KEY) || DEFAULT_WINDOW_TITLE;
+}
+
+function getDefaultSessionKind() {
+  return localStorage.getItem(DEFAULT_SESSION_KIND_KEY) || 'agent';
+}
+
+function getDefaultSessionAgent() {
+  return localStorage.getItem(DEFAULT_SESSION_AGENT_KEY) || 'opencode';
+}
+
+function applyWindowTitle() {
+  const title = getWindowTitleSetting().trim() || DEFAULT_WINDOW_TITLE;
+  document.title = title;
+  const header = document.getElementById('app-title');
+  if (header) header.textContent = title;
+}
+
+function showSettingsModal() {
+  document.getElementById('settings-title').value = getWindowTitleSetting();
+  document.getElementById('settings-default-kind').value = getDefaultSessionKind();
+  document.getElementById('settings-default-agent').value = getDefaultSessionAgent();
+  document.getElementById('settings-overlay').classList.remove('hidden');
+  document.getElementById('settings-title').focus();
+}
+
+function hideSettingsModal() {
+  document.getElementById('settings-overlay').classList.add('hidden');
+}
+
+function resetSettingsForm() {
+  document.getElementById('settings-title').value = DEFAULT_WINDOW_TITLE;
+  document.getElementById('settings-default-kind').value = 'agent';
+  document.getElementById('settings-default-agent').value = 'opencode';
+}
+
+document.getElementById('settings-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const title = document.getElementById('settings-title').value.trim() || DEFAULT_WINDOW_TITLE;
+  const kind = document.getElementById('settings-default-kind').value;
+  const agent = document.getElementById('settings-default-agent').value;
+  sessionStorage.setItem(WINDOW_TITLE_KEY, title);
+  localStorage.setItem(DEFAULT_SESSION_KIND_KEY, kind);
+  localStorage.setItem(DEFAULT_SESSION_AGENT_KEY, agent);
+  applyWindowTitle();
+  hideSettingsModal();
+});
 
 function setSessionFilter(filter) {
   sessionFilter = filter;
@@ -1798,8 +1851,8 @@ async function dismissFocusQuestion(questionId) {
 
 function showNewSessionModal() {
   document.getElementById('new-session-overlay').classList.remove('hidden');
-  document.getElementById('ns-kind').value = 'agent';
-  document.getElementById('ns-agent').value = 'opencode';
+  document.getElementById('ns-kind').value = getDefaultSessionKind();
+  document.getElementById('ns-agent').value = getDefaultSessionAgent();
   document.getElementById('ns-project').value = '';
   document.getElementById('ns-name').value = '';
   document.getElementById('ns-web-url').value = '';
@@ -2078,6 +2131,7 @@ async function checkAuth() {
 }
 
 function startApp() {
+  applyWindowTitle();
   document.getElementById('app-header').classList.remove('hidden');
   document.getElementById('app-main').classList.remove('hidden');
   if (authRequired) {
@@ -2095,6 +2149,7 @@ function startApp() {
 
 // ── Init ──
 
+applyWindowTitle();
 checkAuth();
 
 // Auto-refresh dashboard every 30s as fallback
