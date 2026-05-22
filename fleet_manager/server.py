@@ -629,18 +629,15 @@ class _TokenRedactFilter(logging.Filter):
     """Redact auth tokens from uvicorn access logs."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if hasattr(record, "args") and isinstance(record.args, tuple):
+        if isinstance(record.args, tuple):
             record.args = tuple(
-                str(a).replace(a.split("token=")[1].split("&")[0].split(" ")[0].split('"')[0], "***")
+                re.sub(r"token=[^&\s\"']+", "token=***", a)
                 if isinstance(a, str) and "token=" in a
                 else a
                 for a in record.args
             )
-        msg = record.getMessage()
-        if "token=" in msg:
-            import re
+        elif isinstance(record.msg, str) and "token=" in record.msg:
             record.msg = re.sub(r"token=[^&\s\"']+", "token=***", record.msg)
-            record.args = None
         return True
 
 
