@@ -8,12 +8,15 @@ let pendingQuestionsMap = {};  // session_id -> count
 let authRequired = false;
 let focusSessionId = null;
 let focusRefreshTimer = null;
+let currentSessionData = null;
+let focusSessionData = null;
 
 // View mode state
 let viewMode = localStorage.getItem('fleet_view_mode') || 'list';
 let activeTabSessionId = null;
 let viewRefreshTimer = null;
 let terminalMode = 'standard';
+let sessionFilter = localStorage.getItem('fleet_session_filter') || 'all';
 
 // ── Message History (per-session) ──
 
@@ -32,6 +35,51 @@ function _getHistory(sessionId) {
   if (!sessionId) return [];
   if (!allHistory[sessionId]) allHistory[sessionId] = [];
   return allHistory[sessionId];
+}
+
+function setSessionFilter(filter) {
+  sessionFilter = filter;
+  localStorage.setItem('fleet_session_filter', filter);
+  document.querySelectorAll('.filter-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.filter === filter);
+  });
+  updateMobileFilterToggle();
+  refreshDashboard();
+}
+
+function cycleSessionFilter() {
+  const order = ['all', 'agent', 'opencode_web'];
+  const idx = order.indexOf(sessionFilter);
+  setSessionFilter(order[(idx + 1) % order.length]);
+}
+
+function updateMobileFilterToggle() {
+  const btn = document.getElementById('mobile-filter-toggle');
+  if (!btn) return;
+  const labels = {
+    all: '◎',
+    agent: 'A',
+    opencode_web: 'W',
+  };
+  const titles = {
+    all: 'Showing all sessions',
+    agent: 'Showing agent sessions',
+    opencode_web: 'Showing workspace sessions',
+  };
+  btn.textContent = labels[sessionFilter] || '◎';
+  btn.title = titles[sessionFilter] || 'Cycle session filter';
+}
+
+function filterSessions(sessions) {
+  if (sessionFilter === 'all') return sessions;
+  return sessions.filter(s => (s.session_type || 'agent') === sessionFilter);
+}
+
+function updateSessionFilterSummary(allSessions, visibleSessions) {
+  const agents = allSessions.filter(s => (s.session_type || 'agent') === 'agent').length;
+  const workspaces = allSessions.filter(s => s.session_type === 'opencode_web').length;
+  const label = sessionFilter === 'all' ? 'all sessions' : sessionFilter === 'agent' ? 'agent sessions' : 'workspace sessions';
+  document.getElementById('session-filter-summary').textContent = `${visibleSessions.length} shown, ${agents} agents, ${workspaces} workspaces, filter: ${label}`;
 }
 
 function pushHistory(text) {
@@ -128,38 +176,63 @@ function connectWS() {
     setTimeout(connectWS, 3000);
   };
 
-  ws.onmessage = (evt) => {
+  ws.onmessage = async (evt) => {
     const { event, data } = JSON.parse(evt.data);
-    handleEvent(event, data);
+    await handleEvent(event, data);
   };
 }
 
-function handleEvent(event, data) {
+async function handleEvent(event, data) {
   if (event === 'session:update' || event === 'session:stale') {
     refreshDashboard();
     if (currentSessionId && data.session_id === currentSessionId) {
+      currentSessionData = data;
       loadSessionDetail(currentSessionId);
     }
     if (focusSessionId && data.session_id === focusSessionId) {
+      focusSessionData = data;
       updateFocusHeader(data);
     }
     // Update active tab/sidetab terminal on session update
     if (activeTabSessionId && data.session_id === activeTabSessionId) {
-      if (viewMode === 'tab') loadTerminalInto(activeTabSessionId, 'tab-terminal');
-      else if (viewMode === 'sidetab') loadTerminalInto(activeTabSessionId, 'sidetab-terminal');
+      if (viewMode === 'tab' && document.getElementById('tab-workspace').classList.contains('hidden')) {
+        loadTerminalInto(activeTabSessionId, 'tab-terminal');
+      } else if (viewMode === 'sidetab' && document.getElementById('sidetab-workspace').classList.contains('hidden')) {
+        loadTerminalInto(activeTabSessionId, 'sidetab-terminal');
+      }
     }
   } else if (event === 'question:new') {
     refreshDashboard();
     if (currentSessionId && data.session_id === currentSessionId) {
       loadQuestions(currentSessionId);
+      // Also show modal in list view
+      if (viewMode === 'list') {
+        showQuestionModal(data.session_id);
+      }
     }
     if (focusSessionId && data.session_id === focusSessionId) {
       showQuestionModal(data.session_id);
+    }
+    if (activeTabSessionId && data.session_id === activeTabSessionId) {
+      if (viewMode === 'tab') showTabQuestionModal(activeTabSessionId);
+      else if (viewMode === 'sidetab') showSideTabQuestionModal(activeTabSessionId);
     }
     notify('Question', data.context || 'A session needs input', data.session_id);
   } else if (event === 'question:answered') {
     refreshDashboard();
     if (currentSessionId) loadQuestions(currentSessionId);
+    if (focusSessionId && data.session_id === focusSessionId) {
+      const remaining = await api(`/api/questions/${focusSessionId}`);
+      if (remaining.length === 0) {
+        closeQuestionModal();
+      }
+    }
+    if (activeTabSessionId && data.session_id === activeTabSessionId) {
+      const remaining = await api(`/api/questions/${activeTabSessionId}`);
+      if (remaining.length === 0) {
+        closeQuestionModal();
+      }
+    }
   } else if (event === 'session:message') {
     if (currentSessionId && data.session_id === currentSessionId) {
       showMessageStatus(
@@ -288,10 +361,13 @@ function ansi256(n) {
 
 async function refreshDashboard() {
   try {
-    const [sessions, questions] = await Promise.all([
-      api('/api/sessions'),
-      api('/api/questions?pending=true'),
-    ]);
+    const activeWorkspaceSession =
+      (currentSessionData && currentSessionData.session_type === 'opencode_web' && currentSessionData) ||
+      (focusSessionData && focusSessionData.session_type === 'opencode_web' && focusSessionData) ||
+      null;
+
+    const sessions = await api('/api/sessions');
+    const questions = activeWorkspaceSession ? [] : await api('/api/questions?pending=true');
 
     // Update session count
     document.getElementById('session-count').innerHTML = `<span class="count-num">${sessions.length}</span><span class="btn-label"> session${sessions.length !== 1 ? 's' : ''}</span>`;
@@ -311,11 +387,14 @@ async function refreshDashboard() {
       banner.classList.add('hidden');
     }
 
+    const filteredSessions = filterSessions(sessions);
+    updateSessionFilterSummary(sessions, filteredSessions);
+
     // Dispatch to active renderer
     switch (viewMode) {
-      case 'list':    renderListView(sessions); break;
-      case 'tab':     renderTabView(sessions); break;
-      case 'sidetab': renderSideTabView(sessions); break;
+      case 'list':    renderListView(filteredSessions); break;
+      case 'tab':     renderTabView(filteredSessions); break;
+      case 'sidetab': renderSideTabView(filteredSessions); break;
     }
   } catch (e) {
     console.error('Dashboard refresh error:', e);
@@ -327,9 +406,9 @@ function renderListView(sessions) {
   if (sessions.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
-        <h2>No sessions yet</h2>
-        <p>Start a fleet session with:</p>
-        <p><code>fleet start --name my-session --project /path/to/project</code></p>
+        <h2>${sessionFilter === 'all' ? 'No sessions yet' : 'No matching sessions'}</h2>
+        <p>${sessionFilter === 'all' ? 'Start a fleet session with:' : 'Try a different session filter or create a matching session type.'}</p>
+        ${sessionFilter === 'all' ? '<p><code>fleet start --name my-session --project /path/to/project</code></p>' : ''}
       </div>
     `;
     return;
@@ -338,11 +417,13 @@ function renderListView(sessions) {
   container.innerHTML = sessions.map(s => {
     const qCount = pendingQuestionsMap[s.session_id] || 0;
     const hasQ = qCount > 0;
+    const isWorkspace = s.session_type === 'opencode_web';
+    const workspaceOrigin = isWorkspace ? (s.web_port ? 'fleet proxied' : 'external url') : '';
     return `
-      <div class="session-card${hasQ ? ' has-question' : ''}">
+      <div class="session-card${hasQ ? ' has-question' : ''}${isWorkspace ? ' workspace-card' : ''}">
         ${hasQ ? `<span class="question-badge">${qCount} ?</span>` : ''}
         <div class="row">
-          <span class="name" onclick="showSession('${s.session_id}')" style="cursor:pointer">${esc(s.session_id)}</span>
+          <span class="name" onclick="showSession('${s.session_id}')" style="cursor:pointer">${esc(s.session_id)}${getSessionTypeBadge(s)}</span>
           <div style="display:flex;gap:0.4rem;align-items:center">
             <span class="state state-${s.state}">${s.state}</span>
             <button class="btn-sm btn-focus" onclick="event.stopPropagation();openFocus('${s.session_id}')">Open</button>
@@ -353,6 +434,7 @@ function renderListView(sessions) {
           ${s.project_root ? esc(s.project_root) + ' &middot; ' : ''}${timeAgo(s.last_seen)}
           ${s.queued_messages ? ` &middot; <span class="queued-badge">${s.queued_messages} queued</span>` : ''}
         </div>
+        ${isWorkspace ? `<div class="workspace-summary"><span class="workspace-origin-badge">${workspaceOrigin}</span><span>${s.web_port ? `localhost:${s.web_port}` : esc(s.web_url || 'custom url')}</span></div>` : ''}
       </div>
     `;
   }).join('');
@@ -373,80 +455,34 @@ function renderTabView(sessions) {
     return `
       <button class="tab-btn${isActive ? ' active' : ''}" onclick="selectTab('${s.session_id}')" title="${esc(s.summary || s.state)}">
         <span class="tab-dot" style="background:${stateColor}"></span>
-        ${esc(s.session_id)}
+        <span class="tab-session-meta">${esc(s.session_id)}${getSessionTypeBadge(s)}</span>
         ${qCount > 0 ? `<span class="tab-question-badge">${qCount}</span>` : ''}
         ${s.queued_messages ? `<span class="tab-queued-badge">${s.queued_messages}</span>` : ''}
       </button>
     `;
   }).join('');
 
-  // Populate keys bar
-  document.getElementById('tab-keys-bar').innerHTML = generateKeysBarHtml('tab');
-
-  // Load terminal for active tab
   if (activeTabSessionId) {
-    loadTerminalInto(activeTabSessionId, 'tab-terminal');
-    // Check for pending questions on active tab
-    showTabQuestionModal(activeTabSessionId);
+    const activeSession = sessions.find(s => s.session_id === activeTabSessionId);
+    if (activeSession) {
+      document.getElementById('tab-keys-bar').innerHTML = isAgentSession(activeSession) ? generateKeysBarHtml('tab') : '';
+      renderTabBody(activeSession, 'tab');
+    }
   } else {
     document.getElementById('tab-terminal').innerHTML = '<span style="color:var(--text-muted);padding:1rem;display:block">No sessions — start one with + New Session</span>';
   }
 }
 
 async function showTabQuestionModal(sessionId) {
-  try {
-    const questions = await api(`/api/questions/${sessionId}`);
-    if (questions.length === 0) return;
-    const container = document.getElementById('tab-questions');
-    container.innerHTML = questions.map(q => {
-      const items = JSON.parse(q.items);
-      return `
-        <div class="question-item" data-qid="${q.question_id}">
-          ${q.context ? `<div class="q-context">${esc(q.context)}</div>` : ''}
-          ${items.map(renderQuestionInput).join('')}
-          <div class="q-actions">
-            <button onclick="submitTabAnswer('${q.question_id}')">Submit</button>
-            <button class="btn-muted" onclick="dismissTabQuestion('${q.question_id}')">Dismiss</button>
-          </div>
-        </div>
-      `;
-    }).join('');
-  } catch {}
+  showQuestionModal(sessionId);
 }
 
 async function submitTabAnswer(questionId) {
-  const container = document.querySelector(`#tab-questions [data-qid="${questionId}"]`);
-  const answer = {};
-  container.querySelectorAll('input[type="text"], select').forEach(el => {
-    answer[el.id.replace('q-', '')] = el.value;
-  });
-  container.querySelectorAll('input[type="checkbox"]:checked').forEach(el => {
-    const cls = [...el.className].find(c => c.startsWith('ms-'));
-    if (cls) {
-      const itemId = cls.replace('ms-', '');
-      if (!answer[itemId]) answer[itemId] = [];
-      answer[itemId].push(el.value);
-    }
-  });
-  try {
-    await api(`/api/questions/${questionId}/answer`, {
-      method: 'POST',
-      body: JSON.stringify({ answer }),
-    });
-    showTabQuestionModal(activeTabSessionId);
-  } catch (e) {
-    console.error('Answer error:', e);
-  }
+  await submitFocusAnswer(questionId);
 }
 
 async function dismissTabQuestion(questionId) {
-  if (!confirm('Dismiss this question?')) return;
-  try {
-    await api(`/api/questions/${questionId}`, { method: 'DELETE' });
-    showTabQuestionModal(activeTabSessionId);
-  } catch (e) {
-    console.error('Dismiss error:', e);
-  }
+  await dismissFocusQuestion(questionId);
 }
 
 function selectTab(sessionId) {
@@ -454,7 +490,7 @@ function selectTab(sessionId) {
   activeTabSessionId = sessionId;
   refreshDashboard();
   restoreDraft(document.getElementById('tab-msg-input'));
-  showTabQuestionModal(sessionId);
+  showQuestionModal(sessionId);
 }
 
 function renderSideTabView(sessions) {
@@ -471,7 +507,7 @@ function renderSideTabView(sessions) {
     return `
       <div class="sidetab-item${isActive ? ' active' : ''}" onclick="selectSideTab('${s.session_id}')">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:0.4rem">
-          <span class="sidetab-name">${esc(s.session_id)}</span>
+          <span class="sidetab-name">${esc(s.session_id)} ${getSessionTypeBadge(s)}</span>
           <span class="state state-${s.state}" style="font-size:0.65rem;padding:1px 6px">${s.state}</span>
         </div>
         <div class="sidetab-summary">${esc(s.summary || '')}</div>
@@ -484,72 +520,27 @@ function renderSideTabView(sessions) {
     `;
   }).join('');
 
-  // Populate keys bar
-  document.getElementById('sidetab-keys-bar').innerHTML = generateKeysBarHtml('sidetab');
-
-  // Load terminal for active session
   if (activeTabSessionId) {
-    loadTerminalInto(activeTabSessionId, 'sidetab-terminal');
-    showSideTabQuestionModal(activeTabSessionId);
+    const activeSession = sessions.find(s => s.session_id === activeTabSessionId);
+    if (activeSession) {
+      document.getElementById('sidetab-keys-bar').innerHTML = isAgentSession(activeSession) ? generateKeysBarHtml('sidetab') : '';
+      renderTabBody(activeSession, 'sidetab');
+    }
   } else {
     document.getElementById('sidetab-terminal').innerHTML = '<span style="color:var(--text-muted);padding:1rem;display:block">No sessions — start one with + New Session</span>';
   }
 }
 
 async function showSideTabQuestionModal(sessionId) {
-  try {
-    const questions = await api(`/api/questions/${sessionId}`);
-    if (questions.length === 0) return;
-    const container = document.getElementById('sidetab-questions');
-    container.innerHTML = questions.map(q => {
-      const items = JSON.parse(q.items);
-      return `
-        <div class="question-item" data-qid="${q.question_id}">
-          ${q.context ? `<div class="q-context">${esc(q.context)}</div>` : ''}
-          ${items.map(renderQuestionInput).join('')}
-          <div class="q-actions">
-            <button onclick="submitSideTabAnswer('${q.question_id}')">Submit</button>
-            <button class="btn-muted" onclick="dismissSideTabQuestion('${q.question_id}')">Dismiss</button>
-          </div>
-        </div>
-      `;
-    }).join('');
-  } catch {}
+  showQuestionModal(sessionId);
 }
 
 async function submitSideTabAnswer(questionId) {
-  const container = document.querySelector(`#sidetab-questions [data-qid="${questionId}"]`);
-  const answer = {};
-  container.querySelectorAll('input[type="text"], select').forEach(el => {
-    answer[el.id.replace('q-', '')] = el.value;
-  });
-  container.querySelectorAll('input[type="checkbox"]:checked').forEach(el => {
-    const cls = [...el.className].find(c => c.startsWith('ms-'));
-    if (cls) {
-      const itemId = cls.replace('ms-', '');
-      if (!answer[itemId]) answer[itemId] = [];
-      answer[itemId].push(el.value);
-    }
-  });
-  try {
-    await api(`/api/questions/${questionId}/answer`, {
-      method: 'POST',
-      body: JSON.stringify({ answer }),
-    });
-    showSideTabQuestionModal(activeTabSessionId);
-  } catch (e) {
-    console.error('Answer error:', e);
-  }
+  await submitFocusAnswer(questionId);
 }
 
 async function dismissSideTabQuestion(questionId) {
-  if (!confirm('Dismiss this question?')) return;
-  try {
-    await api(`/api/questions/${questionId}`, { method: 'DELETE' });
-    showSideTabQuestionModal(activeTabSessionId);
-  } catch (e) {
-    console.error('Dismiss error:', e);
-  }
+  await dismissFocusQuestion(questionId);
 }
 
 function selectSideTab(sessionId) {
@@ -562,6 +553,7 @@ function selectSideTab(sessionId) {
 
 function showDashboard() {
   currentSessionId = null;
+  currentSessionData = null;
   stopAutoRefresh();
   document.getElementById('dashboard').classList.remove('hidden');
   document.getElementById('session-detail').classList.add('hidden');
@@ -614,6 +606,9 @@ function generateKeysBarHtml(prefix, sessionVar) {
           </div>
           <div class="cmd-dropdown-item" onclick="sendCommandTo(${sv},'/resume','${prefix}-msg-status');closeViewDropdown('${prefix}')">
             <span class="cmd-name">/resume</span><span class="cmd-desc">Resume previous session</span>
+          </div>
+          <div class="cmd-dropdown-item" onclick="sendCommandTo(${sv},'/new','${prefix}-msg-status');closeViewDropdown('${prefix}')">
+            <span class="cmd-name">/new</span><span class="cmd-desc">New context</span>
           </div>
           <div class="cmd-dropdown-divider"></div>
           <div class="cmd-dropdown-item" onclick="remindSession(${sv});closeViewDropdown('${prefix}')">
@@ -837,7 +832,9 @@ function setViewMode(mode) {
   if (mode === 'tab' || mode === 'sidetab') {
     const termId = mode === 'tab' ? 'tab-terminal' : 'sidetab-terminal';
     viewRefreshTimer = setInterval(() => {
-      if (activeTabSessionId) loadTerminalInto(activeTabSessionId, termId);
+      const workspaceId = mode === 'tab' ? 'tab-workspace' : 'sidetab-workspace';
+      const workspaceVisible = !document.getElementById(workspaceId).classList.contains('hidden');
+      if (activeTabSessionId && !workspaceVisible) loadTerminalInto(activeTabSessionId, termId);
     }, 3000);
   }
 
@@ -875,23 +872,36 @@ function updateThemeToggleIcon() {
 // ── Session Detail ──
 
 async function showSession(sessionId) {
+  try {
+    const session = await api(`/api/sessions/${sessionId}`);
+    if (!isAgentSession(session)) {
+      activeTabSessionId = sessionId;
+      if (viewMode === 'list') {
+        setViewMode('tab');
+      } else {
+        showDashboard();
+      }
+      return;
+    }
+  } catch (e) {
+    console.error('Session lookup error:', e);
+  }
   currentSessionId = sessionId;
   document.getElementById('dashboard').classList.add('hidden');
   document.getElementById('session-detail').classList.remove('hidden');
-  document.getElementById('detail-keys-bar').innerHTML = generateKeysBarHtml('detail', 'currentSessionId');
-  await Promise.all([
-    loadSessionDetail(sessionId),
-    loadQuestions(sessionId),
-    loadOutput(sessionId),
-  ]);
+  await loadSessionDetail(sessionId);
 }
 
 async function loadSessionDetail(sessionId) {
   try {
     const s = await api(`/api/sessions/${sessionId}`);
+    currentSessionData = s;
+    const isAgent = isAgentSession(s);
+    document.getElementById('session-detail').classList.toggle('workspace-detail', !isAgent);
     document.getElementById('detail-header').innerHTML = `
       <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap">
         <h2 style="font-size:1.2rem;font-weight:600">${esc(s.session_id)}</h2>
+        ${getSessionTypeBadge(s)}
         <span class="state state-${s.state}">${s.state}</span>
         <span style="color:var(--text-muted);font-size:0.85rem">${timeAgo(s.last_seen)}</span>
       </div>
@@ -899,6 +909,25 @@ async function loadSessionDetail(sessionId) {
       ${s.summary ? `<p style="margin-top:6px">${esc(s.summary)}</p>` : ''}
       ${s.detail ? `<p style="color:var(--text-muted);font-size:0.88rem;margin-top:4px">${esc(s.detail)}</p>` : ''}
     `;
+    configureDetailActions(s);
+    document.querySelector('#session-detail .panel-header h3').textContent = isAgent ? 'Terminal Output' : 'Workspace';
+    setDisplayMode('detail-top-panels', !isAgent);
+    setDisplayMode('detail-history-panel', !isAgent);
+    setDisplayMode('terminal-output', !isAgent);
+    setDisplayMode('detail-workspace', isAgent);
+    setDisplayMode('detail-keys-bar', !isAgent);
+    setDisplayMode('message-form', !isAgent);
+    setDisplayMode('auto-refresh-toggle', !isAgent);
+    if (isAgent) {
+      document.getElementById('message-status').classList.add('hidden');
+      document.getElementById('detail-keys-bar').innerHTML = generateKeysBarHtml('detail', 'currentSessionId');
+      await Promise.all([loadQuestions(sessionId), loadOutput(sessionId)]);
+    } else {
+      stopAutoRefresh();
+      document.getElementById('questions-container').innerHTML = '<p style="color:var(--text-muted)">Workspace sessions do not use fleet question relay.</p>';
+      showMessageStatus('Workspace sessions are embedded views and do not receive fleet terminal messages.', 'success');
+      renderWorkspace(s, 'detail-workspace');
+    }
 
     // Status log
     const logContainer = document.getElementById('status-log');
@@ -1006,6 +1035,10 @@ async function dismissQuestion(questionId) {
 }
 
 async function loadOutput(sessionId) {
+  if (currentSessionData && currentSessionData.session_type !== 'agent') {
+    renderWorkspace(currentSessionData, 'detail-workspace');
+    return;
+  }
   // Use shared loader with lazy scroll support
   await loadTerminalInto(sessionId, 'terminal-output');
   // Initial load scrolls to bottom
@@ -1069,7 +1102,11 @@ function showMessageStatus(text, type) {
 
 async function deleteCurrentSession() {
   if (!currentSessionId) return;
-  if (!confirm(`Stop and remove session "${currentSessionId}"? This will kill the tmux session.`)) return;
+  const isAgent = !currentSessionData || currentSessionData.session_type === 'agent';
+  const message = isAgent
+    ? `Stop and remove session "${currentSessionId}"? This will kill the tmux session.`
+    : `Stop and remove workspace "${currentSessionId}"? Fleet will stop the managed OpenCode web server if it started one.`;
+  if (!confirm(message)) return;
   try {
     await api(`/api/sessions/${currentSessionId}`, { method: 'DELETE' });
     clearSessionHistory(currentSessionId);
@@ -1103,6 +1140,181 @@ function fmtTime(ts) {
     return new Date(ts + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   } catch {
     return ts;
+  }
+}
+
+function isAgentSession(session) {
+  return !session || session.session_type === 'agent';
+}
+
+function getSessionTypeLabel(session) {
+  return isAgentSession(session) ? 'Agent' : 'Web UI';
+}
+
+function getSessionTypeBadge(session) {
+  return `<span class="session-type-badge">${getSessionTypeLabel(session)}</span>`;
+}
+
+function getWorkspaceUrl(session) {
+  if (!session) return null;
+  const token = getAuthToken();
+  if (session.web_port) {
+    const host = location.hostname;
+    const hostParts = host.split('.');
+    const canUseSubdomain = hostParts.length >= 2 && !/^\d+\.\d+\.\d+\.\d+$/.test(host) && host !== 'localhost';
+    const projectRoute = session.project_root ? `/${encodeURIComponent(session.project_root)}/` : '/';
+    const qs = token ? `?token=${encodeURIComponent(token)}` : '';
+    if (canUseSubdomain) {
+      const workspaceHost = `${encodeURIComponent(session.session_id)}.${host}`;
+      return `${location.protocol}//${workspaceHost}${location.port ? `:${location.port}` : ''}${projectRoute}${qs}`;
+    }
+    return `${API}/workspace/${encodeURIComponent(session.session_id)}${projectRoute}${qs}`;
+  }
+  if (session.web_url) return session.web_url;
+  return null;
+}
+
+function getSessionDataById(sessionId) {
+  if (currentSessionData && currentSessionData.session_id === sessionId) return currentSessionData;
+  if (focusSessionData && focusSessionData.session_id === sessionId) return focusSessionData;
+  return { session_id: sessionId, web_port: null, web_url: null };
+}
+
+function openWorkspaceInNewTab(sessionId) {
+  const url = getWorkspaceUrl(getSessionDataById(sessionId));
+  if (url) window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function getWorkspaceStatusElementId(containerId) {
+  if (containerId === 'tab-workspace') return 'tab-msg-status';
+  if (containerId === 'sidetab-workspace') return 'sidetab-msg-status';
+  if (containerId === 'focus-workspace') return 'focus-msg-status';
+  return 'message-status';
+}
+
+function reloadWorkspaceSession(sessionId, statusElId) {
+  if (!sessionId) return;
+  rerenderWorkspaceViews(sessionId).catch((e) => {
+    showStatusMsg(statusElId, `Failed: ${e.message}`, 'error');
+  });
+}
+
+function renderWorkspace(session, containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const url = getWorkspaceUrl(session);
+  const statusElId = getWorkspaceStatusElementId(containerId);
+  container.classList.remove('hidden');
+  const existingFrame = container.querySelector('iframe');
+  if (url && existingFrame && container.dataset.workspaceUrl === url) {
+    return;
+  }
+  container.dataset.workspaceUrl = url || '';
+  container.innerHTML = url
+    ? `<div class="workspace-toolbar">
+         <div class="workspace-toolbar-meta">${esc(session.project_root || session.session_id || '')}</div>
+         <div class="workspace-toolbar-actions">
+           <button class="btn-sm workspace-action-btn" title="Reload workspace" onclick="reloadWorkspaceSession('${esc(session.session_id).replace(/'/g, "\\'")}','${statusElId}')"><span class="workspace-action-icon">↻</span><span class="workspace-action-label">Reload</span></button>
+           <button class="btn-sm workspace-action-btn" title="Restart workspace" onclick="restartWorkspaceSession('${esc(session.session_id).replace(/'/g, "\\'")}','${statusElId}')"><span class="workspace-action-icon">⟲</span><span class="workspace-action-label">Restart</span></button>
+           <button class="btn-sm workspace-action-btn" title="Open workspace in new tab" onclick="openWorkspaceInNewTab('${esc(session.session_id).replace(/'/g, "\\'")}')"><span class="workspace-action-icon">↗</span><span class="workspace-action-label">Open</span></button>
+         </div>
+       </div>
+       <div class="workspace-frame-wrap">
+         <iframe src="${esc(url)}" title="${esc(session.session_id)} workspace" loading="lazy" referrerpolicy="no-referrer"></iframe>
+       </div>`
+    : `<div class="workspace-empty"><strong>No workspace URL configured</strong><p>Add a <code>web_url</code> or <code>web_port</code> for this OpenCode workspace session.</p></div>`;
+}
+
+function showWorkspaceLoading(containerId, message = 'Loading workspace...') {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.classList.remove('hidden');
+  container.innerHTML = `<div class="workspace-empty"><strong>${esc(message)}</strong><p>Fleet is waiting for the OpenCode workspace to become ready.</p></div>`;
+}
+
+async function rerenderWorkspaceViews(sessionId) {
+  const session = await api(`/api/sessions/${sessionId}`);
+  if (currentSessionId === sessionId) {
+    currentSessionData = session;
+    await loadSessionDetail(sessionId);
+  }
+  if (focusSessionId === sessionId) {
+    focusSessionData = session;
+    updateFocusHeader(session);
+    await loadFocusOutput();
+  }
+  if (activeTabSessionId === sessionId) {
+    if (viewMode === 'tab') {
+      renderTabBody(session, 'tab');
+    } else if (viewMode === 'sidetab') {
+      renderTabBody(session, 'sidetab');
+    }
+  }
+}
+
+function setDisplayMode(elementId, hidden) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  el.classList.toggle('hidden', hidden);
+}
+
+function renderTabBody(session, prefix) {
+  const isAgent = isAgentSession(session);
+  setDisplayMode(`${prefix}-terminal`, !isAgent);
+  setDisplayMode(`${prefix}-workspace`, isAgent);
+  setDisplayMode(`${prefix}-keys-bar`, !isAgent);
+  setDisplayMode(`${prefix}-message-form`, !isAgent);
+  setDisplayMode(`${prefix}-questions`, !isAgent);
+  if (isAgent) {
+    loadTerminalInto(session.session_id, `${prefix}-terminal`);
+    showQuestionModal(session.session_id);
+    return;
+  }
+  renderWorkspace(session, `${prefix}-workspace`);
+}
+
+function configureDetailActions(session) {
+  const isAgent = isAgentSession(session);
+  document.getElementById('detail-refresh-btn').textContent = isAgent ? 'Refresh Output' : 'Reload Workspace';
+  document.getElementById('detail-refresh-btn').onclick = () => {
+    if (isAgent) loadOutput(currentSessionId);
+    else renderWorkspace(session, 'detail-workspace');
+  };
+  setDisplayMode('detail-restart-btn', isAgent);
+  setDisplayMode('detail-unstick-btn', !isAgent);
+  document.getElementById('detail-remove-btn').textContent = isAgent ? 'Remove' : 'Remove Workspace';
+}
+
+function configureFocusActions(session) {
+  const isAgent = isAgentSession(session);
+  setDisplayMode('focus-detail-btn', !isAgent);
+  setDisplayMode('focus-edit-btn', !isAgent);
+  setDisplayMode('focus-unstick-btn', !isAgent);
+  setDisplayMode('focus-restart-btn', isAgent);
+  setDisplayMode('focus-fork-btn', !isAgent || !session.claude_session_id);
+  document.getElementById('focus-stop-btn').textContent = isAgent ? 'Stop' : 'Remove';
+}
+
+async function restartWorkspaceSession(sessionId, statusElId) {
+  if (!sessionId) return;
+  if (!confirm(`Restart OpenCode workspace "${sessionId}"?`)) return;
+  try {
+    if (currentSessionId === sessionId) showWorkspaceLoading('detail-workspace', 'Restarting workspace...');
+    if (focusSessionId === sessionId) showWorkspaceLoading('focus-workspace', 'Restarting workspace...');
+    if (activeTabSessionId === sessionId) {
+      if (viewMode === 'tab') showWorkspaceLoading('tab-workspace', 'Restarting workspace...');
+      if (viewMode === 'sidetab') showWorkspaceLoading('sidetab-workspace', 'Restarting workspace...');
+    }
+    await api(`/api/sessions/${sessionId}/restart`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    showStatusMsg(statusElId, `Restarted ${sessionId}`, 'success');
+    await refreshDashboard();
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    await rerenderWorkspaceViews(sessionId);
+  } catch (e) {
+    showStatusMsg(statusElId, `Failed: ${e.message}`, 'error');
   }
 }
 
@@ -1143,7 +1355,7 @@ async function refreshMultiView() {
       grid.innerHTML = sessions.map(s => `
         <div class="multi-pane">
           <div class="multi-pane-header">
-            <span class="pane-title">${esc(s.session_id)}</span>
+            <span class="pane-title">${esc(s.session_id)} ${getSessionTypeBadge(s)}</span>
             <span class="state state-${s.state}">${s.state}</span>
           </div>
           <pre class="multi-pane-terminal" data-sid="${s.session_id}" onclick="closeMultiView();openFocus('${s.session_id}')"
@@ -1167,6 +1379,13 @@ async function refreshMultiView() {
     await Promise.all(sessions.map(async s => {
       const pre = grid.querySelector(`[data-sid="${s.session_id}"]`);
       if (!pre) return;
+      if (!isAgentSession(s)) {
+        const url = getWorkspaceUrl(s);
+        pre.innerHTML = url
+          ? `Open workspace: ${esc(url)}`
+          : '(workspace URL not configured)';
+        return;
+      }
       try {
         const data = await api(`/api/sessions/${s.session_id}/output`);
         const wasAtBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 50;
@@ -1188,6 +1407,7 @@ async function refreshMultiView() {
 
 async function openFocus(sessionId) {
   focusSessionId = sessionId;
+  focusSessionData = null;
   document.getElementById('focus-overlay').classList.remove('hidden');
   const focusInput = document.getElementById('focus-msg-input');
   restoreDraft(focusInput);
@@ -1197,22 +1417,23 @@ async function openFocus(sessionId) {
   // Load session info + output
   try {
     const s = await api(`/api/sessions/${sessionId}`);
+    focusSessionData = s;
     updateFocusHeader(s);
-    if (s.claude_session_id) {
-      document.getElementById('focus-fork-btn').classList.remove('hidden');
-    }
+    configureFocusActions(s);
   } catch {}
   await loadFocusOutput();
 
   // Auto-refresh output every 3s
-  focusRefreshTimer = setInterval(loadFocusOutput, 3000);
+  if (!focusSessionData || isAgentSession(focusSessionData)) {
+    focusRefreshTimer = setInterval(loadFocusOutput, 3000);
+  }
 
   // Check for pending questions
-  showQuestionModal(sessionId);
+  if (!focusSessionData || isAgentSession(focusSessionData)) showQuestionModal(sessionId);
 }
 
 function updateFocusHeader(s) {
-  document.getElementById('focus-name').textContent = s.session_id || focusSessionId;
+  document.getElementById('focus-name').innerHTML = `${esc(s.session_id || focusSessionId)} ${getSessionTypeBadge(s)}`;
   const stateEl = document.getElementById('focus-state');
   stateEl.textContent = s.state || '';
   stateEl.className = `state state-${s.state || 'IDLE'}`;
@@ -1221,12 +1442,25 @@ function updateFocusHeader(s) {
 
 async function loadFocusOutput() {
   if (!focusSessionId) return;
+  if (focusSessionData && !isAgentSession(focusSessionData)) {
+    setDisplayMode('focus-terminal', true);
+    setDisplayMode('focus-workspace', false);
+    setDisplayMode('focus-keys-bar', true);
+    setDisplayMode('focus-message-form', true);
+    renderWorkspace(focusSessionData, 'focus-workspace');
+    return;
+  }
+  setDisplayMode('focus-terminal', false);
+  setDisplayMode('focus-workspace', true);
+  setDisplayMode('focus-keys-bar', false);
+  setDisplayMode('focus-message-form', false);
   await loadTerminalInto(focusSessionId, 'focus-terminal');
 }
 
 function closeFocus() {
   saveDraft(document.getElementById('focus-msg-input'));
   focusSessionId = null;
+  focusSessionData = null;
   document.getElementById('focus-overlay').classList.add('hidden');
   if (focusRefreshTimer) {
     clearInterval(focusRefreshTimer);
@@ -1268,7 +1502,11 @@ function openDetailFromFocus() {
 
 async function deleteFocusSession() {
   if (!focusSessionId) return;
-  if (!confirm(`Stop and remove session "${focusSessionId}"? This will kill the tmux session.`)) return;
+  const isAgent = !focusSessionData || focusSessionData.session_type === 'agent';
+  const message = isAgent
+    ? `Stop and remove session "${focusSessionId}"? This will kill the tmux session.`
+    : `Stop and remove workspace "${focusSessionId}"? Fleet will stop the managed OpenCode web server if it started one.`;
+  if (!confirm(message)) return;
   try {
     await api(`/api/sessions/${focusSessionId}`, { method: 'DELETE' });
     clearSessionHistory(focusSessionId);
@@ -1523,17 +1761,17 @@ async function submitFocusAnswer(questionId) {
     }
   });
 
+  const sessionId = focusSessionId || activeTabSessionId;
   try {
     await api(`/api/questions/${questionId}/answer`, {
       method: 'POST',
       body: JSON.stringify({ answer }),
     });
-    // Refresh — if no more questions, close modal
-    const remaining = await api(`/api/questions/${focusSessionId}`);
+    const remaining = await api(`/api/questions/${sessionId}`);
     if (remaining.length === 0) {
       closeQuestionModal();
     } else {
-      showQuestionModal(focusSessionId);
+      showQuestionModal(sessionId);
     }
   } catch (e) {
     console.error('Answer error:', e);
@@ -1542,13 +1780,14 @@ async function submitFocusAnswer(questionId) {
 
 async function dismissFocusQuestion(questionId) {
   if (!confirm('Dismiss this question? The session will continue without an answer and can be replied to directly in the terminal.')) return;
+  const sessionId = focusSessionId || activeTabSessionId;
   try {
     await api(`/api/questions/${questionId}`, { method: 'DELETE' });
-    const remaining = await api(`/api/questions/${focusSessionId}`);
+    const remaining = await api(`/api/questions/${sessionId}`);
     if (remaining.length === 0) {
       closeQuestionModal();
     } else {
-      showQuestionModal(focusSessionId);
+      showQuestionModal(sessionId);
     }
   } catch (e) {
     console.error('Dismiss error:', e);
@@ -1559,10 +1798,15 @@ async function dismissFocusQuestion(questionId) {
 
 function showNewSessionModal() {
   document.getElementById('new-session-overlay').classList.remove('hidden');
+  document.getElementById('ns-kind').value = 'agent';
   document.getElementById('ns-agent').value = 'opencode';
   document.getElementById('ns-project').value = '';
   document.getElementById('ns-name').value = '';
+  document.getElementById('ns-web-url').value = '';
+  document.getElementById('ns-web-port').value = '';
+  document.getElementById('ns-name').dataset.manual = '';
   document.getElementById('ns-error').classList.add('hidden');
+  syncNewSessionForm();
   hidePathAutocomplete();
   document.getElementById('ns-project').focus();
 }
@@ -1579,6 +1823,24 @@ function autoFillSessionName() {
   const project = document.getElementById('ns-project').value.trim().replace(/\/+$/, '');
   const parts = project.split('/');
   nameInput.placeholder = parts[parts.length - 1] || '(auto from path)';
+}
+
+function syncNewSessionForm() {
+  const kind = document.getElementById('ns-kind').value;
+  setDisplayMode('ns-agent-fields', kind !== 'agent');
+  setDisplayMode('ns-web-advanced-toggle', kind === 'agent');
+  if (kind === 'agent') {
+    setDisplayMode('ns-web-fields', true);
+  }
+  document.getElementById('ns-submit').textContent = kind === 'agent' ? 'Start' : 'Register';
+}
+
+function toggleWebAdvancedFields() {
+  const fields = document.getElementById('ns-web-fields');
+  const toggle = document.getElementById('ns-web-advanced-toggle');
+  const willShow = fields.classList.contains('hidden');
+  fields.classList.toggle('hidden', !willShow);
+  toggle.textContent = willShow ? 'Hide advanced workspace options' : 'Advanced workspace options';
 }
 
 // Track if user manually edited the name field
@@ -1704,20 +1966,35 @@ document.getElementById('new-session-form').addEventListener('submit', async (e)
   const submitBtn = document.getElementById('ns-submit');
   errorEl.classList.add('hidden');
 
+  const kind = document.getElementById('ns-kind').value;
   const agent = document.getElementById('ns-agent').value.trim();
   const project = document.getElementById('ns-project').value.trim();
   const name = document.getElementById('ns-name').value.trim();
+  const webUrl = document.getElementById('ns-web-url').value.trim();
+  const webPort = document.getElementById('ns-web-port').value.trim();
 
   if (!project) return;
 
   submitBtn.disabled = true;
-  submitBtn.textContent = 'Starting...';
+  submitBtn.textContent = kind === 'agent' ? 'Starting...' : 'Registering...';
 
   try {
-    await api('/api/sessions/start', {
-      method: 'POST',
-      body: JSON.stringify({ agent, project, name }),
-    });
+    if (kind === 'agent') {
+      await api('/api/sessions/start', {
+        method: 'POST',
+        body: JSON.stringify({ agent, project, name }),
+      });
+    } else {
+      await api('/api/sessions/web', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          project_root: project,
+          web_url: webUrl || null,
+          web_port: webPort ? Number(webPort) : null,
+        }),
+      });
+    }
     hideNewSessionModal();
     refreshDashboard();
   } catch (e) {
@@ -1725,7 +2002,7 @@ document.getElementById('new-session-form').addEventListener('submit', async (e)
     errorEl.classList.remove('hidden');
   } finally {
     submitBtn.disabled = false;
-    submitBtn.textContent = 'Start';
+    submitBtn.textContent = kind === 'agent' ? 'Start' : 'Register';
   }
 });
 
@@ -1806,6 +2083,10 @@ function startApp() {
   if (authRequired) {
     document.getElementById('logout-btn').classList.remove('hidden');
   }
+  document.querySelectorAll('.filter-pill').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.filter === sessionFilter);
+  });
+  updateMobileFilterToggle();
   // Initialize view mode from localStorage (calls refreshDashboard internally)
   setViewMode(viewMode);
   updateThemeToggleIcon();
@@ -1819,6 +2100,7 @@ checkAuth();
 // Auto-refresh dashboard every 30s as fallback
 setInterval(() => {
   if (!document.getElementById('login-overlay').classList.contains('hidden')) return;
+  if (currentSessionId) return;
   refreshDashboard();
 }, 30000);
 

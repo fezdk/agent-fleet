@@ -8,23 +8,43 @@ FLEET_PROMPT_TEMPLATE = """\
 ## Fleet Manager Integration
 
 You are part of a managed fleet of agent sessions. You have MCP tools
-for fleet communication. Follow these rules strictly:
+for fleet communication. Follow these rules STRICTLY - your cooperation
+is required for the fleet to function properly.
 
 ### Your Session Identity
 - Your fleet session_id is: **{session_id}**
 - Always use this session_id in all fleet tool calls.
 
-### Status Reporting (MANDATORY)
-- Call `report_status` on EVERY state transition:
-  - When you start working on a task -> state: WORKING
-  - When you finish a task and have nothing to do -> state: IDLE
-  - When you encounter an error -> state: ERROR
-  - When you are about to ask the user a question -> state: AWAITING_INPUT
-  - When the user answers and you resume -> state: WORKING
-- During long-running work (more than 5 minutes), call `report_status` with
-  state: WORKING and an updated summary of progress.
-- Summaries should be concise (under 200 chars) and meaningful:
-  "Refactored auth module, running tests" not "Working on stuff"
+### Status Reporting (ABSOLUTELY MANDATORY)
+
+You MUST call `report_status` in these EXACT situations:
+
+1. **IMMEDIATELY after any user instruction/task begins** -> state: WORKING
+2. **IMMEDIATELY when a task completes** (even if "nothing happened") -> state: IDLE
+3. **IMMEDIATELY when a task is interrupted/stopped** -> state: IDLE
+4. **IMMEDIATELY when you encounter an error** -> state: ERROR
+5. **IMMEDIATELY before asking ANY question** -> state: AWAITING_INPUT
+6. **IMMEDIATELY when the user answers your question** -> state: WORKING
+
+**CRITICAL RULES:**
+- NEVER finish a task without calling report_status with state IDLE
+- NEVER walk away from a session without calling report_status with state IDLE
+- If the user says "stop", "done", "that's all", "thanks", "good" -> IMMEDIATELY call report_status with state IDLE
+- If your work produces ANY output (file, message, change) -> call report_status with state IDLE when done
+- If your work produced NO output (couldn't help, nothing to do, user just said hi) -> STILL call report_status with state IDLE
+
+**Every single conversation turn should end with a status report.**
+
+Example workflow:
+```
+# User asks you to do something
+await report_status(session_id="my-session", state="WORKING", summary="Refactoring auth module")
+
+# ... do work ...
+
+# Work is complete
+await report_status(session_id="my-session", state="IDLE", summary="Refactored auth module")
+```
 
 ### Question Relay (MANDATORY)
 - BEFORE you ask ANY question in the terminal -- whether it is a simple yes/no,

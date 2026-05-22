@@ -15,6 +15,11 @@ class Session:
     tmux_session: str
     tmux_pane: str
     project_root: str | None
+    session_type: str
+    web_url: str | None
+    web_port: int | None
+    web_host: str | None
+    process_pid: int | None
     state: str  # IDLE, WORKING, AWAITING_INPUT, ERROR
     summary: str | None
     detail: str | None
@@ -93,6 +98,36 @@ def _migrate(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE sessions ADD COLUMN agent TEXT DEFAULT 'opencode'")
         db.commit()
 
+    cursor = db.execute("PRAGMA table_info(sessions)")
+    columns = {row["name"] for row in cursor.fetchall()}
+    if "session_type" not in columns:
+        db.execute("ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'agent'")
+        db.commit()
+
+    cursor = db.execute("PRAGMA table_info(sessions)")
+    columns = {row["name"] for row in cursor.fetchall()}
+    if "web_url" not in columns:
+        db.execute("ALTER TABLE sessions ADD COLUMN web_url TEXT")
+        db.commit()
+
+    cursor = db.execute("PRAGMA table_info(sessions)")
+    columns = {row["name"] for row in cursor.fetchall()}
+    if "web_port" not in columns:
+        db.execute("ALTER TABLE sessions ADD COLUMN web_port INTEGER")
+        db.commit()
+
+    cursor = db.execute("PRAGMA table_info(sessions)")
+    columns = {row["name"] for row in cursor.fetchall()}
+    if "web_host" not in columns:
+        db.execute("ALTER TABLE sessions ADD COLUMN web_host TEXT DEFAULT '127.0.0.1'")
+        db.commit()
+
+    cursor = db.execute("PRAGMA table_info(sessions)")
+    columns = {row["name"] for row in cursor.fetchall()}
+    if "process_pid" not in columns:
+        db.execute("ALTER TABLE sessions ADD COLUMN process_pid INTEGER")
+        db.commit()
+
     cursor = db.execute("PRAGMA table_info(inbox)")
     inbox_columns = {row["name"] for row in cursor.fetchall()}
     if "raw" not in inbox_columns:
@@ -108,6 +143,11 @@ def _create_schema() -> None:
             tmux_session  TEXT NOT NULL,
             tmux_pane     TEXT DEFAULT '0',
             project_root  TEXT,
+            session_type  TEXT DEFAULT 'agent',
+            web_url       TEXT,
+            web_port      INTEGER,
+            web_host      TEXT DEFAULT '127.0.0.1',
+            process_pid   INTEGER,
             state         TEXT DEFAULT 'IDLE',
             summary       TEXT,
             detail        TEXT,
@@ -166,12 +206,41 @@ def create_session(
     tmux_pane: str = "0",
     project_root: str | None = None,
     agent: str = "opencode",
+    session_type: str = "agent",
+    web_url: str | None = None,
+    web_port: int | None = None,
+    web_host: str | None = None,
+    process_pid: int | None = None,
 ) -> dict[str, Any]:
     db = get_db()
     db.execute(
-        """INSERT INTO sessions (session_id, tmux_session, tmux_pane, project_root, agent, state, last_seen)
-           VALUES (?, ?, ?, ?, ?, 'IDLE', datetime('now'))""",
-        (session_id, tmux_session, tmux_pane, project_root, agent),
+        """INSERT INTO sessions (
+               session_id, tmux_session, tmux_pane, project_root, agent,
+               session_type, web_url, web_port, web_host, process_pid, state, last_seen
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'IDLE', datetime('now'))""",
+        (session_id, tmux_session, tmux_pane, project_root, agent, session_type, web_url, web_port, web_host, process_pid),
+    )
+    db.commit()
+    return get_session(session_id)  # type: ignore[return-value]
+
+
+def update_web_session(
+    session_id: str,
+    *,
+    web_url: str | None = None,
+    web_port: int | None = None,
+    web_host: str | None = None,
+    process_pid: int | None = None,
+) -> dict[str, Any]:
+    db = get_db()
+    db.execute(
+        """UPDATE sessions
+           SET web_url = COALESCE(?, web_url),
+               web_port = COALESCE(?, web_port),
+               web_host = COALESCE(?, web_host),
+               process_pid = COALESCE(?, process_pid)
+           WHERE session_id = ?""",
+        (web_url, web_port, web_host, process_pid, session_id),
     )
     db.commit()
     return get_session(session_id)  # type: ignore[return-value]

@@ -10,5 +10,6 @@ build/
 .mcp.json
 nohup.out
 .env
+opencode.json
 *.db
 *~

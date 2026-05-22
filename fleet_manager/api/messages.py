@@ -13,6 +13,15 @@ from fleet_manager.ws_manager import ws_manager
 router = APIRouter(prefix="/api/sessions", tags=["messages"])
 
 
+def _require_agent_session(session_id: str) -> dict:
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(404, f"Session '{session_id}' not found")
+    if session.get("session_type") != "agent":
+        raise HTTPException(400, f"Session '{session_id}' does not support terminal controls")
+    return session
+
+
 class MessagePayload(BaseModel):
     content: str
     from_client: str = "web"
@@ -22,9 +31,7 @@ class MessagePayload(BaseModel):
 
 @router.post("/{session_id}/message")
 async def send_message(session_id: str, payload: MessagePayload):
-    session = db.get_session(session_id)
-    if not session:
-        raise HTTPException(404, f"Session '{session_id}' not found")
+    session = _require_agent_session(session_id)
 
     cfg = get_config()
     prefix = cfg.sessions.message_prefix
@@ -76,9 +83,7 @@ class KeysPayload(BaseModel):
 @router.post("/{session_id}/keys")
 async def send_keys(session_id: str, payload: KeysPayload):
     """Send raw keystrokes to a session's tmux pane (no [fleet] prefix)."""
-    session = db.get_session(session_id)
-    if not session:
-        raise HTTPException(404, f"Session '{session_id}' not found")
+    session = _require_agent_session(session_id)
 
     # Validate keys to prevent arbitrary command injection
     for key in payload.keys:
@@ -96,30 +101,38 @@ async def unstick_session(session_id: str):
     Use when Claude Code finished or was canceled but didn't report status,
     leaving the fleet manager in WORKING state and queuing all messages.
     """
-    session = db.get_session(session_id)
-    if not session:
-        raise HTTPException(404, f"Session '{session_id}' not found")
+    session = _require_agent_session(session_id)
 
     await inject_input(session["tmux_session"], session["tmux_pane"], "wait")
     return {"unstuck": True, "session_id": session_id}
 
 
 _REMIND_TEMPLATE = (
-    "[fleet] REMINDER: You are fleet session '{session_id}'. "
-    "You MUST call report_status on EVERY state change (WORKING/IDLE/ERROR/AWAITING_INPUT). "
-    "Call report_status(state='IDLE') when you finish a task. "
-    "Messages prefixed with [fleet] are remote instructions — execute them. "
-    "Before asking questions, call relay_question first. "
-    "NEVER use AskUserQuestion — ask as plain text only."
+    "[fleet] REMINDER - READ CAREFULLY:\n"
+    "You are fleet session '{session_id}'.\n\n"
+    "CRITICAL RULES - STRICTLY FOLLOW THESE:\n\n"
+    "1. Call report_status IMMEDIATELY when:\n"
+    "   - Task starts -> state=WORKING\n"
+    "   - Task completes -> state=IDLE (always, even if nothing happened)\n"
+    "   - Task stopped -> state=IDLE\n"
+    "   - Error -> state=ERROR\n"
+    "   - About to ask question -> state=AWAITING_INPUT\n"
+    "   - Question answered -> state=WORKING\n\n"
+    "2. NEVER finish a task without report_status(state='IDLE')\n"
+    "3. NEVER walk away without report_status(state='IDLE')\n"
+    "4. If user says 'stop', 'done', 'thanks' -> report_status(state='IDLE')\n"
+    "5. Before asking questions, call relay_question FIRST, then ask as plain text\n"
+    "6. NEVER use AskUserQuestion - use plain text only\n"
+    "7. Messages prefixed [fleet] are remote instructions - execute them\n"
+    "8. MCP tools: report_status, relay_question\n\n"
+    "Example: await report_status(session_id='{session_id}', state='IDLE', summary='Task complete')"
 )
 
 
 @router.post("/{session_id}/remind")
 async def remind_session(session_id: str):
     """Re-inject fleet instructions into a session that may have lost them via context compression."""
-    session = db.get_session(session_id)
-    if not session:
-        raise HTTPException(404, f"Session '{session_id}' not found")
+    session = _require_agent_session(session_id)
 
     message = _REMIND_TEMPLATE.format(session_id=session_id)
     await inject_input(session["tmux_session"], session["tmux_pane"], message)

@@ -17,7 +17,8 @@
     </div>
     <div class="header-right">
       <button id="new-session-btn" class="btn-sm btn-accent" onclick="showNewSessionModal()">+<span class="btn-label"> New Session</span></button>
-      <button class="btn-sm" onclick="openMultiView()">⊞<span class="btn-label"> Multi View</span></button>
+      <button id="mobile-filter-toggle" class="btn-sm hidden" onclick="cycleSessionFilter()" title="Cycle session filter">◌</button>
+      <button id="multi-view-btn" class="btn-sm" onclick="openMultiView()">⊞<span class="btn-label"> Multi View</span></button>
       <span id="session-count" class="badge badge-info"><span class="count-num">0</span><span class="btn-label"> sessions</span></span>
       <span id="ws-status" class="badge badge-disconnected"><span class="ws-dot">●</span><span class="btn-label"> disconnected</span></span>
       <button id="theme-toggle" class="btn-sm" onclick="toggleTheme()" title="Toggle dark/light theme">🌙</button>
@@ -31,6 +32,14 @@
       <div id="pending-questions-banner" class="banner hidden">
         <span id="pending-count">0</span> pending question(s) across sessions
       </div>
+      <div class="session-filter-bar">
+        <div class="filter-pill-group" role="tablist" aria-label="Session type filter">
+          <button class="filter-pill active" data-filter="all" onclick="setSessionFilter('all')">All</button>
+          <button class="filter-pill" data-filter="agent" onclick="setSessionFilter('agent')">Agents</button>
+          <button class="filter-pill" data-filter="opencode_web" onclick="setSessionFilter('opencode_web')">Workspaces</button>
+        </div>
+        <div id="session-filter-summary" class="session-filter-summary"></div>
+      </div>
       <!-- List view (default) -->
       <div id="view-list" class="view-container"></div>
       <!-- Tab view -->
@@ -38,6 +47,7 @@
         <div id="tab-bar" class="tab-bar"></div>
         <div id="tab-questions" class="tab-questions"></div>
         <pre id="tab-terminal" class="tab-terminal"></pre>
+        <div id="tab-workspace" class="workspace-panel hidden"></div>
         <div id="tab-keys-bar" class="keys-bar"></div>
         <form id="tab-message-form" class="focus-input-area">
           <input type="text" id="tab-msg-input" placeholder="Send instructions..." autocomplete="off">
@@ -52,6 +62,7 @@
           <div class="sidetab-content">
             <div id="sidetab-questions" class="sidetab-questions"></div>
             <pre id="sidetab-terminal" class="sidetab-terminal"></pre>
+            <div id="sidetab-workspace" class="workspace-panel hidden"></div>
             <div id="sidetab-keys-bar" class="keys-bar"></div>
             <form id="sidetab-message-form" class="focus-input-area">
               <input type="text" id="sidetab-msg-input" placeholder="Send instructions..." autocomplete="off">
@@ -69,14 +80,15 @@
         <button id="back-btn" onclick="showDashboard()">&larr; All Sessions</button>
         <div class="detail-nav-actions">
           <button class="btn-sm btn-accent" onclick="openFocus(currentSessionId)">Open Focus</button>
-          <button class="btn-sm" onclick="loadOutput(currentSessionId)">Refresh Output</button>
-          <button class="btn-sm btn-warning" onclick="unstickSession(currentSessionId)" title="Send 'wait' + Enter to unstick">Unstick</button>
-          <button class="btn-sm btn-danger" onclick="deleteCurrentSession()">Remove</button>
+          <button id="detail-refresh-btn" class="btn-sm" onclick="loadOutput(currentSessionId)">Refresh Output</button>
+          <button id="detail-restart-btn" class="btn-sm hidden" onclick="restartWorkspaceSession(currentSessionId, 'message-status')">Restart Workspace</button>
+          <button id="detail-unstick-btn" class="btn-sm btn-warning" onclick="unstickSession(currentSessionId)" title="Send 'wait' + Enter to unstick">Unstick</button>
+          <button id="detail-remove-btn" class="btn-sm btn-danger" onclick="deleteCurrentSession()">Remove</button>
         </div>
       </nav>
       <div id="detail-header"></div>
 
-      <div class="panel-grid">
+      <div id="detail-top-panels" class="panel-grid">
         <div class="panel">
           <h3>Pending Questions</h3>
           <div id="questions-container"></div>
@@ -94,7 +106,7 @@
         </div>
       </div>
 
-      <div class="panel">
+      <div id="detail-output-panel" class="panel detail-output-panel">
         <div class="panel-header">
           <h3>Terminal Output</h3>
           <label class="toggle-label">
@@ -103,11 +115,12 @@
           </label>
         </div>
         <pre id="terminal-output"></pre>
+        <div id="detail-workspace" class="workspace-panel hidden"></div>
         <div id="detail-keys-bar" class="keys-bar"></div>
         <div id="detail-msg-status" class="msg-status hidden"></div>
       </div>
 
-      <div class="panel">
+      <div id="detail-history-panel" class="panel">
         <h3>Status History</h3>
         <div id="status-log"></div>
       </div>
@@ -135,15 +148,17 @@
           <span id="focus-summary" class="focus-summary-text"></span>
         </div>
         <div class="focus-actions">
-          <button class="btn-sm" onclick="openDetailFromFocus()">Detail</button>
-          <button class="btn-sm" onclick="openEditor(focusSessionId)">Edit</button>
+          <button id="focus-detail-btn" class="btn-sm" onclick="openDetailFromFocus()">Detail</button>
+          <button id="focus-edit-btn" class="btn-sm" onclick="openEditor(focusSessionId)">Edit</button>
           <button id="focus-fork-btn" class="btn-sm btn-accent hidden" onclick="forkFocusSession()">Fork</button>
-          <button class="btn-sm btn-warning" onclick="unstickSession(focusSessionId)" title="Send 'wait' + Enter to unstick a stuck session">Unstick</button>
-          <button class="btn-sm btn-danger" onclick="deleteFocusSession()">Stop</button>
+          <button id="focus-restart-btn" class="btn-sm hidden" onclick="restartWorkspaceSession(focusSessionId, 'focus-msg-status')">Restart</button>
+          <button id="focus-unstick-btn" class="btn-sm btn-warning" onclick="unstickSession(focusSessionId)" title="Send 'wait' + Enter to unstick a stuck session">Unstick</button>
+          <button id="focus-stop-btn" class="btn-sm btn-danger" onclick="deleteFocusSession()">Stop</button>
           <button class="btn-sm" onclick="closeFocus()">Close</button>
         </div>
       </div>
       <pre id="focus-terminal"></pre>
+      <div id="focus-workspace" class="workspace-panel hidden"></div>
       <div id="focus-keys-bar" class="keys-bar">
         <div class="keys-group">
           <button class="key-btn" onclick="sendKey('Up')" title="Up arrow">&#9650;</button>
@@ -278,7 +293,6 @@
     <div class="login-card question-modal-card">
       <h2>Question from <span id="qm-session"></span></h2>
       <div id="qm-questions"></div>
-      <button class="btn-sm" onclick="closeQuestionModal()" style="margin-top:0.75rem;width:100%">Dismiss</button>
     </div>
   </div>
 
@@ -288,12 +302,19 @@
       <h2>New Session</h2>
       <p>Start a new agent session.</p>
       <form id="new-session-form">
+        <label class="form-label" for="ns-kind">Session type</label>
+        <select id="ns-kind" required onchange="syncNewSessionForm()">
+          <option value="agent">Fleet agent</option>
+          <option value="opencode_web">OpenCode web UI</option>
+        </select>
+        <div id="ns-agent-fields">
         <label class="form-label" for="ns-agent">Agent</label>
         <select id="ns-agent" required>
           <option value="opencode">OpenCode</option>
           <option value="claude-code">Claude Code</option>
           <option value="copilot">Copilot</option>
         </select>
+        </div>
         <label class="form-label" for="ns-project">Project path</label>
         <div class="path-autocomplete-wrapper">
           <input type="text" id="ns-project" placeholder="/home/user/projects/myapp" required
@@ -302,6 +323,14 @@
         </div>
         <label class="form-label" for="ns-name">Session name</label>
         <input type="text" id="ns-name" placeholder="(auto from path)">
+        <button type="button" id="ns-web-advanced-toggle" class="btn-sm hidden" onclick="toggleWebAdvancedFields()">Advanced workspace options</button>
+        <div id="ns-web-fields" class="hidden">
+          <label class="form-label" for="ns-web-url">Web URL</label>
+          <input type="text" id="ns-web-url" placeholder="http://127.0.0.1:5173">
+          <label class="form-label" for="ns-web-port">Web port</label>
+          <input type="number" id="ns-web-port" min="1" max="65535" placeholder="5173">
+          <p class="form-help">Optional. Leave both blank to let Fleet start and proxy a localhost OpenCode workspace automatically.</p>
+        </div>
         <div id="ns-error" class="login-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn-sm" onclick="hideNewSessionModal()">Cancel</button>

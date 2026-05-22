@@ -13,10 +13,25 @@ from fastapi import WebSocket
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from fleet_manager.config import get_config
+from fleet_manager import db
 
 # Paths that skip auth
-_SKIP_PREFIXES = ("/style", "/app.", "/favicon")
+_SKIP_PREFIXES = ("/style", "/app.", "/favicon", "/workspace/", "/assets/")
 _SKIP_EXACT = {"/", "/ws", "/api/auth/check", "/api/config"}
+
+
+def _workspace_host_session(host_header: str) -> str | None:
+    host = host_header.split(":", 1)[0].strip().lower()
+    if not host or "." not in host:
+        return None
+    session_id = host.split(".", 1)[0]
+    try:
+        session = db.get_session(session_id)
+    except Exception:
+        return None
+    if session and session.get("session_type") == "opencode_web":
+        return session_id
+    return None
 
 
 class AuthMiddleware:
@@ -49,6 +64,12 @@ class AuthMiddleware:
 
         # Extract token from headers or query string
         headers = dict(scope.get("headers", []))
+        host_header = headers.get(b"host", b"").decode()
+
+        if _workspace_host_session(host_header):
+            await self.app(scope, receive, send)
+            return
+
         auth_header = headers.get(b"authorization", b"").decode()
         query_string = scope.get("query_string", b"").decode()
 

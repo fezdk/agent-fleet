@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
+import socket
 import subprocess
 import time
+import urllib.error
+import urllib.request
 
 from fleet_manager import db
 from fleet_manager.config import get_config
@@ -16,6 +20,8 @@ from fleet_manager.tmux_bridge import session_exists, kill_session
 logger = logging.getLogger(__name__)
 
 TMUX_PREFIX = "fleet-"
+WEB_HOST = "127.0.0.1"
+USER_BIN_PATHS = ("~/.opencode/bin", "~/.local/bin")
 
 
 class LaunchError(Exception):
@@ -24,6 +30,41 @@ class LaunchError(Exception):
 
 def _tmux_sync(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["tmux", *args], capture_output=True, text=True)
+
+
+def _env_with_user_bins() -> dict[str, str]:
+    env = os.environ.copy()
+    paths = env.get("PATH", "").split(os.pathsep) if env.get("PATH") else []
+    for path in reversed(USER_BIN_PATHS):
+        expanded = os.path.expanduser(path)
+        if expanded not in paths:
+            paths.insert(0, expanded)
+    env["PATH"] = os.pathsep.join(paths)
+    return env
+
+
+def _pick_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((WEB_HOST, 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_http(url: str, timeout_seconds: float = 20.0) -> None:
+    deadline = time.time() + timeout_seconds
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as resp:
+                if resp.status < 500:
+                    return
+        except (urllib.error.URLError, TimeoutError) as exc:
+            last_error = exc
+        time.sleep(0.5)
+    raise LaunchError(f"Timed out waiting for web workspace at {url}: {last_error}")
+
+
+def _log_file_for_session(name: str) -> str:
+    return f"/tmp/fleet-opencode-web-{name}.log"
 
 
 async def start_session(
@@ -117,6 +158,7 @@ async def start_session(
     script_file = f"/tmp/fleet-launch-{name}.sh"
     with open(script_file, "w") as f:
         f.write(f'#!/bin/bash\n')
+        f.write(f'export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$PATH"\n')
         f.write(config_check)
         f.write(config_write)
         f.write(f'fi\n')
@@ -226,6 +268,7 @@ async def fork_session(
     tmux_target = f"={TMUX_PREFIX}{new_name}:0"
     with open(script_file, "w") as f:
         f.write(f'#!/bin/bash\n')
+        f.write(f'export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$PATH"\n')
         f.write(f'# Create .claude.json with MCP config only if not exists\n')
         f.write(f'if [ ! -f {project}/.claude.json ]; then\n')
         f.write(f'  cat > {project}/.claude.json << \'CLAUDE_EOF\'\n')
@@ -252,11 +295,105 @@ async def fork_session(
     return session
 
 
+async def start_web_session(
+    name: str,
+    project: str,
+    web_port: int | None = None,
+) -> dict:
+    """Start a managed project-scoped OpenCode web workspace."""
+    if not os.path.isdir(project):
+        raise LaunchError(f"Project path does not exist: {project}")
+    if db.get_session(name):
+        raise LaunchError(f"Session '{name}' already exists")
+
+    port = web_port or _pick_free_port()
+    log_file = _log_file_for_session(name)
+    with open(log_file, "w") as log_handle:
+        proc = subprocess.Popen(
+            ["opencode", "serve", "--hostname", WEB_HOST, "--port", str(port)],
+            cwd=project,
+            env=_env_with_user_bins(),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    upstream_url = f"http://{WEB_HOST}:{port}/"
+    try:
+        _wait_for_http(upstream_url)
+    except Exception:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except OSError:
+            pass
+        raise
+
+    return db.create_session(
+        name,
+        "",
+        project_root=project,
+        agent="opencode",
+        session_type="opencode_web",
+        web_port=port,
+        web_host=WEB_HOST,
+        process_pid=proc.pid,
+    )
+
+
+async def restart_web_session(name: str) -> dict:
+    session = db.get_session(name)
+    if not session:
+        raise LaunchError(f"Session '{name}' not found")
+    if session.get("session_type") != "opencode_web":
+        raise LaunchError(f"Session '{name}' is not an OpenCode web workspace")
+
+    project = session.get("project_root")
+    if not project:
+        raise LaunchError(f"Session '{name}' has no project root")
+
+    pid = session.get("process_pid")
+    if pid:
+        try:
+            os.killpg(os.getpgid(int(pid)), signal.SIGTERM)
+            time.sleep(1)
+        except OSError:
+            pass
+
+    port = session.get("web_port") or _pick_free_port()
+    log_file = _log_file_for_session(name)
+    with open(log_file, "w") as log_handle:
+        proc = subprocess.Popen(
+            ["opencode", "serve", "--hostname", WEB_HOST, "--port", str(port)],
+            cwd=project,
+            env=_env_with_user_bins(),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    upstream_url = f"http://{WEB_HOST}:{port}/"
+    _wait_for_http(upstream_url)
+    return db.update_web_session(name, web_port=port, web_host=WEB_HOST, process_pid=proc.pid)
+
+
 async def stop_session(name: str) -> bool:
     """Stop a fleet session — kill tmux, clean up prompt file, remove from DB.
 
     Returns True if the session was found and stopped.
     """
+    session = db.get_session(name)
+    if session and session.get("session_type") == "opencode_web":
+        pid = session.get("process_pid")
+        if pid:
+            try:
+                os.killpg(os.getpgid(int(pid)), signal.SIGTERM)
+            except OSError:
+                pass
+        log_file = _log_file_for_session(name)
+        if os.path.exists(log_file):
+            os.remove(log_file)
+        db.delete_session(name)
+        return True
+
     tmux_name = f"{TMUX_PREFIX}{name}"
 
     tmux_killed = await kill_session(tmux_name)

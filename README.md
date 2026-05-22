@@ -51,12 +51,40 @@ source .venv/bin/activate
 python -m fleet_manager.server
 ```
 
+To start it detached after a reboot, put `FLEET_AUTH_TOKEN` in `.env` and run:
+
+```bash
+scripts/start-server.sh
+```
+
 This starts the server on `http://127.0.0.1:7700` which hosts:
 
 - **MCP Server** (Streamable HTTP at `/mcp/mcp`) — agent sessions connect here
 - **REST API** (`/api/`) — sessions, questions, messages
 - **WebSocket** (`/ws`) — live state updates to clients
 - **Web UI** (`/`) — dashboard for monitoring and control
+
+### OpenCode Workspaces
+
+`opencode_web` sessions are project-scoped browser workspaces, not tmux-backed agent sessions.
+
+Fleet can start `opencode serve` for a project, store its local port in the session database, and proxy the web UI through the main Fleet server. Workspaces appear alongside agent sessions in the dashboard with a **Web UI** badge and can be embedded in tab, side-tab, detail, and focus views.
+
+Recommended setup:
+
+- Main Fleet UI on `http://fleet.client.dk:7700`
+- One workspace host per project, for example:
+  - `http://eddiezone.fleet.client.dk:7700`
+  - `http://mutti.fleet.client.dk:7700`
+
+Using per-workspace hostnames isolates browser origin state cleanly and is more reliable than serving multiple OpenCode workspaces under one shared origin with different URL paths.
+
+Workspace controls:
+
+- **Reload** refreshes the embedded workspace frame without changing the process.
+- **Restart** restarts a Fleet-managed `opencode serve` process on the stored port.
+- **Open** launches the proxied workspace in a separate browser tab.
+- **Remove Workspace** removes the session and stops the managed process when Fleet started it.
 
 Environment overrides (set as env vars or in a `.env` file in the project root):
 ```bash
@@ -171,6 +199,8 @@ fleet attach api
 
 Click **+ New Session** in the dashboard header. Select the agent (opencode, Claude Code, or copilot), enter the project path (absolute path on the server), and optionally a session name (defaults to the directory name). The session launches detached — use the dashboard to monitor and interact.
 
+For **OpenCode web UI** sessions, Fleet starts and proxies the workspace automatically by default. Project path is required; URL and port are only for advanced/manual attachment cases.
+
 ### Session Lifecycle
 
 To detach from a session without stopping it, press **Ctrl+B, D** (the tmux status bar at the bottom reminds you of this). You can reattach later with `fleet attach <name>`.
@@ -240,10 +270,12 @@ Dashboard at `http://127.0.0.1:7700`:
   - **List view** (default) — session cards with state indicators, pending question badges, and Open/detail buttons
   - **Tab view** — horizontal browser-style tabs above a full-height terminal with keys bar and message input; great for monitoring one session at a time
   - **Side-tab view** — left panel (280px) with session list showing name/state/summary, right side is terminal + controls; collapses to horizontal strip on mobile
+- **Session filters** — filter the dashboard to all sessions, tmux-backed agents, or OpenCode web workspaces. Mobile uses a compact header toggle for the same filter.
 - **Dark/light theme** — toggle via the sun/moon button in the header. Dark mode uses a Darcula-style palette; terminal stays dark in both modes. Theme preference persists in localStorage
 - **Focus view** — click "Open" on a session card to get a large terminal output modal with auto-refresh (3s), an input bar for sending instructions, and a command dropdown for sending raw messages (slash commands, custom input without `[fleet]` prefix)
 - **Multi view** — click "Multi View" in the header to see all session terminals side-by-side in a responsive grid, auto-refreshing. Click any pane to open its focus view
 - **Session detail** — click the session name for the full detail page with questions, messages, terminal output, and status history
+- **OpenCode web UI sessions** — open in tab view/workspace view rather than the agent detail page. Workspace controls such as reload/restart/open-in-tab live in the workspace toolbar.
 - **Question modals** — when a session asks a question, a modal appears on top of the focus view for answering
 - **New Session** — start sessions directly from the dashboard with project path autocomplete and auto-naming
 - **File editor** — click "Edit" in the focus modal or tab/sidetab keys bar to open an in-browser file editor. Browse the session's project directory, open files in a monospace textarea, and save changes (Ctrl+S). Shows read/write permissions, rejects binary files and files over 500KB. Scoped to the session's project root for safety
@@ -317,10 +349,12 @@ When `FLEET_AUTH_TOKEN` is empty or unset, auth is disabled and everything works
 | GET | `/api/sessions` | List all sessions |
 | POST | `/api/sessions` | Register a session |
 | POST | `/api/sessions/start` | Start a new session (creates tmux + launches agent). Body: `{"project": "...", "name": "", "agent": "opencode"}` |
+| POST | `/api/sessions/web` | Register or start an OpenCode web workspace. Body: `{"project_root": "...", "name": "", "web_url": null, "web_port": null}` |
 | GET | `/api/sessions/:id` | Session detail + status log |
 | GET | `/api/sessions/:id/output` | Terminal output (via tmux) |
+| POST | `/api/sessions/:id/restart` | Restart a Fleet-managed OpenCode web workspace |
 | POST | `/api/sessions/:id/fork` | Fork session (branch conversation into new session) |
-| DELETE | `/api/sessions/:id` | Stop + remove session (kills tmux) |
+| DELETE | `/api/sessions/:id` | Stop + remove session (kills tmux or managed workspace process) |
 | POST | `/api/sessions/:id/message` | Send instructions to session (`raw: true` to skip prefix) |
 | POST | `/api/sessions/:id/keys` | Send raw keystrokes to the terminal (Enter, Escape, arrow keys, etc.) |
 | POST | `/api/sessions/:id/unstick` | Emergency: send "wait" + Enter to wake a stuck session |
@@ -334,6 +368,7 @@ When `FLEET_AUTH_TOKEN` is empty or unset, auth is disabled and everything works
 | POST | `/api/questions/:id/answer` | Answer a question |
 | GET | `/api/health` | Server health + stats |
 | GET | `/api/auth/check` | Check if auth is required + validate token |
+| GET | `/workspace/:session_id/...` | Proxy route for embedded OpenCode web workspaces |
 
 ## WebSocket Events
 

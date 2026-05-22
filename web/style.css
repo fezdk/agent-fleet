@@ -115,6 +115,41 @@ header h1 { font-size: 1.3rem; font-weight: 600; }
   transition: background-color 0.3s, color 0.3s;
 }
 
+.session-filter-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+  flex-wrap: wrap;
+}
+.filter-pill-group {
+  display: inline-flex;
+  gap: 0.35rem;
+  background: var(--surface-hover);
+  padding: 0.25rem;
+  border-radius: 999px;
+}
+.filter-pill {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.filter-pill.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+}
+.session-filter-summary {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
 /* Session cards */
 .session-card {
   background: var(--surface);
@@ -139,8 +174,42 @@ header h1 { font-size: 1.3rem; font-weight: 600; }
   gap: 0.5rem;
 }
 .session-card .name { font-weight: 600; font-size: 1.05rem; }
+.session-type-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.5rem;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--surface-hover);
+  color: var(--text-muted);
+}
 .session-card .summary { color: var(--text-muted); font-size: 0.9rem; margin-top: 4px; }
 .session-card .meta { color: var(--text-muted); font-size: 0.8rem; margin-top: 4px; }
+.session-card.workspace-card {
+  border-style: dashed;
+}
+.workspace-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+.workspace-origin-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--blue);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
 .session-card .question-badge {
   position: absolute;
   top: 8px;
@@ -195,6 +264,20 @@ header h1 { font-size: 1.3rem; font-weight: 600; }
 .btn-warning:hover { background: #fef3c7; }
 
 #detail-header { margin-bottom: 1rem; }
+#session-detail.workspace-detail {
+  min-height: calc(100dvh - 130px);
+  display: flex;
+  flex-direction: column;
+}
+#session-detail.workspace-detail #detail-output-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+#session-detail.workspace-detail .workspace-panel {
+  min-height: 0;
+}
 
 /* Panels */
 .panel-grid {
@@ -528,6 +611,82 @@ header h1 { font-size: 1.3rem; font-weight: 600; }
   white-space: pre;
   line-height: 1.4;
   border-radius: 0;
+}
+.workspace-panel {
+  flex: 1;
+  min-height: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.workspace-panel iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: #fff;
+}
+.workspace-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.workspace-toolbar-meta {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-toolbar-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+.workspace-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.workspace-action-icon {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.workspace-action-label {
+  line-height: 1;
+}
+.workspace-frame-wrap {
+  height: calc(100% - 48px);
+}
+.workspace-frame-wrap iframe {
+  height: 100%;
+}
+#session-detail.workspace-detail .workspace-frame-wrap {
+  flex: 1;
+  height: auto;
+  min-height: 60dvh;
+}
+.workspace-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1.5rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+.workspace-empty code {
+  color: var(--text);
 }
 /* Terminal control keys bar */
 .keys-bar {
@@ -903,6 +1062,12 @@ header h1 { font-size: 1.3rem; font-weight: 600; }
   white-space: pre;
   line-height: 1.4;
 }
+.tab-session-meta,
+.sidetab-session-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
 .tab-questions {
   padding: 0.5rem;
   border-bottom: 1px solid var(--border);
@@ -967,6 +1132,11 @@ header h1 { font-size: 1.3rem; font-weight: 600; }
   overflow: auto;
   white-space: pre;
   line-height: 1.4;
+}
+.form-help {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin-top: 0.35rem;
 }
 .sidetab-questions {
   padding: 0.5rem;
@@ -1215,9 +1385,12 @@ header h1 { font-size: 1.3rem; font-weight: 600; }
   .header-right { gap: 0.3rem; }
   .header-right .btn-sm { padding: 4px 8px; font-size: 0.85rem; }
   .btn-label { display: none; }
+  #multi-view-btn { display: none; }
+  #mobile-filter-toggle { display: inline-flex !important; align-items: center; justify-content: center; min-width: 28px; }
   #session-count { padding: 2px 6px; }
   #ws-status { padding: 2px 6px; }
   .ws-dot { font-size: 1.1rem; line-height: 1; }
+  .session-filter-bar { display: none; }
 
   /* Compact tab bar */
   .tab-btn { padding: 5px 10px; font-size: 0.8rem; }
@@ -1285,6 +1458,25 @@ header h1 { font-size: 1.3rem; font-weight: 600; }
   .focus-input-area input { padding: 6px 8px; font-size: 0.85rem; }
   .focus-input-area button { padding: 6px 12px; font-size: 0.85rem; }
   .focus-modal .msg-status { margin: 0 0.5rem 0.3rem; }
+  .session-filter-summary { display: none; }
+  .workspace-toolbar {
+    gap: 0.4rem;
+    padding: 0.35rem 0.45rem;
+  }
+  .workspace-toolbar-meta {
+    display: none;
+  }
+  .workspace-action-btn {
+    padding: 4px 6px;
+    min-width: 28px;
+    justify-content: center;
+  }
+  .workspace-action-icon {
+    font-size: 0.9rem;
+  }
+  .workspace-action-label {
+    display: none;
+  }
 
   /* Multi modal: also full-width */
   .multi-modal { border-radius: 0; height: 100vh; }
