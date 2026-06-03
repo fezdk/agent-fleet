@@ -121,7 +121,7 @@ def main() -> None:
     start_p = sub.add_parser("start", help="Start a new fleet-managed agent session")
     start_p.add_argument("--name", required=True, help="Session name")
     start_p.add_argument("--project", default=".", help="Project directory")
-    start_p.add_argument("--agent", default="opencode", choices=["opencode", "claude-code", "copilot"],
+    start_p.add_argument("--agent", default="opencode", choices=["opencode", "claude-code", "copilot", "codex"],
                          help="Agent to launch (default: opencode)")
     start_p.add_argument("--port", type=int, default=7700, help="Fleet manager port")
     start_p.add_argument("-d", "--detach", action="store_true",

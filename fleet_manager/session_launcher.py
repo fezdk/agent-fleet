@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import signal
 import socket
 import subprocess
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 TMUX_PREFIX = "fleet-"
 WEB_HOST = "127.0.0.1"
-USER_BIN_PATHS = ("~/.opencode/bin", "~/.local/bin")
+USER_BIN_PATHS = ("~/.opencode/bin", "~/.npm-global/bin", "~/.local/bin")
 
 
 class LaunchError(Exception):
@@ -76,13 +77,13 @@ async def start_session(
     """Start a new fleet-managed agent session.
 
     Validates inputs, creates tmux session, registers MCP, launches agent.
-    Supports agents: "claude-code", "opencode", "copilot"
+    Supports agents: "claude-code", "opencode", "copilot", "codex"
     Returns the created session dict.
 
     Raises LaunchError on validation failures.
     """
     # Validate agent
-    valid_agents = ["claude-code", "opencode", "copilot"]
+    valid_agents = ["claude-code", "opencode", "copilot", "codex"]
     if agent not in valid_agents:
         raise LaunchError(f"Unknown agent '{agent}'. Valid options: {', '.join(valid_agents)}")
 
@@ -147,6 +148,10 @@ async def start_session(
         config_content = json.dumps({"mcp": mcp_config}, indent=2)
         config_check = f"if [ ! -f {project}/.copilot.json ]; then\n"
         config_write = f"  cat > {project}/.copilot.json << 'COPILOT_EOF'\n{config_content}\nCOPILOT_EOF\n"
+    elif agent == "codex":
+        agent_cmd = "codex"
+        config_check = ""
+        config_write = ""
     else:  # claude-code
         agent_cmd = "claude"
         config_file = f"{project}/.claude.json"
@@ -158,15 +163,26 @@ async def start_session(
     script_file = f"/tmp/fleet-launch-{name}.sh"
     with open(script_file, "w") as f:
         f.write(f'#!/bin/bash\n')
-        f.write(f'export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$PATH"\n')
-        f.write(config_check)
-        f.write(config_write)
-        f.write(f'fi\n')
+        f.write(f'export PATH="$HOME/.opencode/bin:$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"\n')
+        if config_check:
+            f.write(config_check)
+            f.write(config_write)
+            f.write(f'fi\n')
+        if agent == "codex" and auth_token:
+            f.write(f'export FLEET_AUTH_TOKEN={shlex.quote(auth_token)}\n')
         f.write(f'sleep 1\n')
         f.write(f'cd {project} && FLEET_SESSION_ID={name} exec {agent_cmd} ')
         if agent == "copilot":
             # Use heredoc to avoid shell quoting issues
             f.write(f'-i "$(cat <<\'FLEET_PROMPT_EOF\'\n')
+            f.write(fleet_prompt)
+            f.write(f'\nFLEET_PROMPT_EOF\n')
+            f.write(f')"\n')
+        elif agent == "codex":
+            f.write(f"-c {shlex.quote(f'mcp_servers.fleet-manager.url={json.dumps(mcp_url)}')} ")
+            if auth_token:
+                f.write("-c " + shlex.quote("mcp_servers.fleet-manager.bearer_token_env_var=\"FLEET_AUTH_TOKEN\"") + " ")
+            f.write(f'"$(cat <<\'FLEET_PROMPT_EOF\'\n')
             f.write(fleet_prompt)
             f.write(f'\nFLEET_PROMPT_EOF\n')
             f.write(f')"\n')
@@ -268,7 +284,7 @@ async def fork_session(
     tmux_target = f"={TMUX_PREFIX}{new_name}:0"
     with open(script_file, "w") as f:
         f.write(f'#!/bin/bash\n')
-        f.write(f'export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$PATH"\n')
+        f.write(f'export PATH="$HOME/.opencode/bin:$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"\n')
         f.write(f'# Create .claude.json with MCP config only if not exists\n')
         f.write(f'if [ ! -f {project}/.claude.json ]; then\n')
         f.write(f'  cat > {project}/.claude.json << \'CLAUDE_EOF\'\n')
