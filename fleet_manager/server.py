@@ -496,12 +496,20 @@ async def workspace_proxy(request: Request, session_id: str, path: str = ""):
     content_type = upstream.headers.get("content-type", "")
     if _is_event_stream(content_type):
         async def stream_body():
-            async for chunk in upstream.aiter_bytes():
-                yield chunk
+            try:
+                async for chunk in upstream.aiter_bytes():
+                    yield chunk
+            except asyncio.CancelledError:
+                raise
+            except httpx.HTTPError as exc:
+                logger.info("Workspace event stream ended for %s (%s): %s", session_id, upstream_path, exc)
 
         async def close_stream() -> None:
             await upstream.aclose()
             await client.aclose()
+
+        response_headers.setdefault("cache-control", "no-cache")
+        response_headers.setdefault("x-accel-buffering", "no")
 
         return StreamingResponse(
             stream_body(),
