@@ -1238,6 +1238,22 @@ function openWorkspaceInNewTab(sessionId) {
   if (url) window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+async function closeWorkspaceSession(sessionId, statusElId) {
+  if (!sessionId) return;
+  if (!confirm(`Close workspace "${sessionId}"? Fleet will stop the managed OpenCode web server if it started one.`)) return;
+  try {
+    await api(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+    clearSessionHistory(sessionId);
+    if (focusSessionId === sessionId) closeFocus();
+    if (currentSessionId === sessionId) showDashboard();
+    if (activeTabSessionId === sessionId) activeTabSessionId = null;
+    showStatusMsg(statusElId, `Closed ${sessionId}`, 'success');
+    await refreshDashboard();
+  } catch (e) {
+    showStatusMsg(statusElId, `Failed: ${e.message}`, 'error');
+  }
+}
+
 function getWorkspaceStatusElementId(containerId) {
   if (containerId === 'tab-workspace') return 'tab-msg-status';
   if (containerId === 'sidetab-workspace') return 'sidetab-msg-status';
@@ -1270,6 +1286,7 @@ function renderWorkspace(session, containerId) {
            <button class="btn-sm workspace-action-btn" title="Reload workspace" onclick="reloadWorkspaceSession('${esc(session.session_id).replace(/'/g, "\\'")}','${statusElId}')"><span class="workspace-action-icon">↻</span><span class="workspace-action-label">Reload</span></button>
            <button class="btn-sm workspace-action-btn" title="Restart workspace" onclick="restartWorkspaceSession('${esc(session.session_id).replace(/'/g, "\\'")}','${statusElId}')"><span class="workspace-action-icon">⟲</span><span class="workspace-action-label">Restart</span></button>
            <button class="btn-sm workspace-action-btn" title="Open workspace in new tab" onclick="openWorkspaceInNewTab('${esc(session.session_id).replace(/'/g, "\\'")}')"><span class="workspace-action-icon">↗</span><span class="workspace-action-label">Open</span></button>
+           <button class="btn-sm btn-danger workspace-action-btn" title="Close workspace" onclick="closeWorkspaceSession('${esc(session.session_id).replace(/'/g, "\\'")}','${statusElId}')"><span class="workspace-action-icon">×</span><span class="workspace-action-label">Close</span></button>
          </div>
        </div>
        <div class="workspace-frame-wrap">
